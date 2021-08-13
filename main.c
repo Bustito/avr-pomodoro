@@ -35,6 +35,7 @@ volatile short busy = 0;
 
 unsigned char selection = 0;
 
+unsigned char actual_interval = 0;
 
 typedef struct timer{
 	unsigned char work_time;
