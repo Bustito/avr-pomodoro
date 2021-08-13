@@ -33,6 +33,7 @@ short intervalConfigIsActive = 0;
 
 volatile short OK_was_pressed = 0;
 volatile short SELECT_was_pressed = 0;
+volatile char get_serial = 0;
 
 unsigned char selection = 0;
 
@@ -65,6 +66,8 @@ void printMenu(unsigned char selection) {
 	} else if (selection == 2) {
 		printf("1 - Start timer\n\r2 - Configure timer\n\r->3 - Put to sleep\n\n\r");
 	}
+	printf("Main menu: %d\tConfig menu: %d\n", mainMenuIsActive, configMenuIsActive);
+	printf("Selection: %d\nworkConfigIsActive: %d\nshortBreakConfigIsActive: %d\nlongBreakConfigIsActive: %d\nintervalConfigIsActive: %d", selection, workConfigIsActive, shortBreakConfigIsActive, longBreakConfigIsActive, intervalConfigIsActive);
 }
 
 void printConfig(unsigned char selection, unsigned char work_time, unsigned char short_break, unsigned char long_break, unsigned char interval){
@@ -84,6 +87,8 @@ void printConfig(unsigned char selection, unsigned char work_time, unsigned char
 		printf("1 - Work time: %d min\n\r2 - Short break: %d min\n\r3 - Long break: %d min\n\r4 - Break interval: %d\n\r5 - Save on rom\n\r->6 - Exit\n\n\r", work_time, short_break, long_break, interval);
 	}
 	
+	printf("Main menu: %d\tConfig menu: %d\n", mainMenuIsActive, configMenuIsActive);
+	printf("Selection: %d\nworkConfigIsActive: %d\nshortBreakConfigIsActive: %d\nlongBreakConfigIsActive: %d\nintervalConfigIsActive: %d", selection, workConfigIsActive, shortBreakConfigIsActive, longBreakConfigIsActive, intervalConfigIsActive);
 }
 
 void init_timer1() {
@@ -152,18 +157,29 @@ int main() {
 	//printConfig(selection, actual_config.work_time, actual_config.long_break_time, actual_config.short_break_time, actual_config.interval);
 
 	while (1) {
+		get_serial = uart_getc();
+
+		if (get_serial == 'S') {
+			SELECT_was_pressed = 1;
+		}else if (get_serial == 'O') {
+			OK_was_pressed = 1;
+		}
+
 		if (OK_was_pressed) {
 			if (mainMenuIsActive){
 
 				if (selection == 0) {
 					/* Go to start timer */
+					mainMenuIsActive = 0;
 					timerIsActive = 1;
 					/* Print timer */
 
 				} else if (selection == 1) {
 					/* Go to config menu */
+					mainMenuIsActive = 0;
 					configMenuIsActive = 1;
 					/* Print config menu */
+					selection = 0;
 					printConfig(selection, actual_config.work_time, actual_config.long_break_time, actual_config.short_break_time, actual_config.interval);
 				} else if (selection == 2) {
 					/* Go to sleep mode */
@@ -171,6 +187,7 @@ int main() {
 					/* Clear main menu */
 				}
 
+				selection = 0;
 			} else if (configMenuIsActive) {
 
 				if (workConfigIsActive){
@@ -193,42 +210,41 @@ int main() {
 						workConfigIsActive = 1;
 					} else if (selection == 1) {
 						/* Modify short break time time */
-						shortBreakConfigIsActive = 1;
+						longBreakConfigIsActive = 1;
 					} else if (selection == 2) {
 						/* Modify long break time time */
-						longBreakConfigIsActive = 1;
+						shortBreakConfigIsActive = 1;
 					} else if (selection == 3) {
 						/* Modify break time */
 						intervalConfigIsActive = 1;
 					} else if (selection == 4) {
+						/* Save configuration on rom */
+						
+					} else if (selection == 5) {
 						/* Go to main menu */
 						configMenuIsActive = 0;
 						mainMenuIsActive = 1;
+						selection = 0;
 						printMenu(selection);
 					}
-
 				}
 				
 			} else if (timerIsActive) {
 				/* Go to main menu */
 				timerIsActive = 0;
 				mainMenuIsActive = 1;
+				selection = 0;
 				printMenu(selection);
 			}
 			OK_was_pressed = 0;
-
 		} else if (SELECT_was_pressed) {
-
 			if (mainMenuIsActive) {
 				selection++;
-
 				if (selection > 2) {
 					selection = 0;
 				}
 				printMenu(selection);
-
 			} else if (configMenuIsActive) {
-
 				if (workConfigIsActive){
 					/* Increment work time */
 					actual_config.work_time++;
