@@ -22,6 +22,9 @@
 
 #define BAUD	9600
 
+volatile short OK_pressed = 0;
+volatile short SELECT_pressed = 0;
+
 short mainMenuIsActive = 1;
 short configMenuIsActive = 0;
 short timerIsActive = 0;
@@ -30,6 +33,12 @@ short workConfigIsActive = 0;
 short shortBreakConfigIsActive = 0;
 short longBreakConfigIsActive = 0;
 short intervalConfigIsActive = 0;
+
+volatile uint64_t total_ticks = 0;
+volatile uint16_t overflows = 0;
+volatile uint16_t remaining_ticks = 0;
+volatile unsigned char timer0_ovf = 0;
+volatile unsigned char timer0_rem = 0;
 
 volatile short busy = 0;
 
@@ -44,6 +53,9 @@ typedef struct timer{
 	unsigned char interval;
 	short autoload;
 }timer;
+
+timer mytimer;
+
 
 void usart_putc(unsigned char data) {
 	while (!(UCSR0A & (1<<UDRE0)));
@@ -151,17 +163,16 @@ void set_timer1 (uint64_t time) {
 
 void set_interrupts() {
 	/* Configure input and set pullups for them */
-	DDRB &= ~((1<<PORTD3)|(1<<PORTD2));
-	//PORTB |= (1<<PORTD3)|(1<<PORTD2);
+	DDRD &= ~((1<<PORTD3)|(1<<PORTD2));
+	//PORTD |= (1<<PORTD3)|(1<<PORTD2);
 
 	/* Configure them as interrupts and select mode of operation */
-	EIMSK |= (01<<INT0)|(1<<INT1);
-	EICRA = (1<<ISC11)|(1<<ISC01);
+	EIMSK |= (0<<INT0)|(1<<INT1);
+	EICRA |= (1<<ISC11)|(1<<ISC01);
+	//EICRA = 0;
 }
 
 int main() {
-
-	timer mytimer;
 
 	/* Load defaults */
 	mytimer.interval = 0;
@@ -182,7 +193,7 @@ int main() {
 	uart_init(UART_BAUD_SELECT(BAUD,F_CPU));
 
 	/* Initialize external interrupts */
-	//set_interrupts();
+	set_interrupts();
 
 	/* Init timers */
 	init_timer1();
@@ -340,44 +351,50 @@ ISR(INT0_vect) {
 /* SELECT button interrupt */
 ISR(INT1_vect) {
 	printf("\t\t\tINT1\n");
-	if (mainMenuIsActive) {
-		selection++;
-		if (selection > 2) {
-			selection = 0;
-		}
-		printMenu(selection);
-	} else if (configMenuIsActive) {
-		if (workConfigIsActive){
-			/* Increment work time */
-			mytimer.work_time++;
-			if (mytimer.work_time>51) {
-				mytimer.work_time = 0;
-			}
-		} else if (shortBreakConfigIsActive) {
-			/* Increment short break time */
-			mytimer.short_break_time++;
-			if (mytimer.short_break_time>16) {
-				mytimer.short_break_time = 0;
-			}
-		} else if (longBreakConfigIsActive) {
-			/* Increment long break time */
-			mytimer.long_break_time++;
-			if (mytimer.long_break_time>21) {
-				mytimer.long_break_time = 0;
-			}
-		} else if (intervalConfigIsActive) {
-			/* Increment interval */
-			mytimer.interval++;
-			if (mytimer.interval>5) {
-				mytimer.interval = 0;
-			}
-
-		} else {
+	SELECT_pressed = 1;
+	if (SELECT_pressed)
+	{
+	
+		if (mainMenuIsActive) {
 			selection++;
-			if (selection > 5) {
+			if (selection > 2) {
 				selection = 0;
 			}
+			printMenu(selection);
+		} else if (configMenuIsActive) {
+			if (workConfigIsActive){
+				/* Increment work time */
+				mytimer.work_time++;
+				if (mytimer.work_time>51) {
+					mytimer.work_time = 0;
+				}
+			} else if (shortBreakConfigIsActive) {
+				/* Increment short break time */
+				mytimer.short_break_time++;
+				if (mytimer.short_break_time>16) {
+					mytimer.short_break_time = 0;
+				}
+			} else if (longBreakConfigIsActive) {
+				/* Increment long break time */
+				mytimer.long_break_time++;
+				if (mytimer.long_break_time>21) {
+					mytimer.long_break_time = 0;
+				}
+			} else if (intervalConfigIsActive) {
+				/* Increment interval */
+				mytimer.interval++;
+				if (mytimer.interval>5) {
+					mytimer.interval = 0;
+				}
+
+			} else {
+				selection++;
+				if (selection > 5) {
+					selection = 0;
+				}
+			}
+			printConfig(selection, mytimer.work_time, mytimer.long_break_time, mytimer.short_break_time, mytimer.interval);
 		}
-		printConfig(selection, mytimer.work_time, mytimer.long_break_time, mytimer.short_break_time, mytimer.interval);
+		SELECT_pressed = 0;
 	}
 }
