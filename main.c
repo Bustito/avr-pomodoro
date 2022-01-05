@@ -1,400 +1,123 @@
-/**********************************************
- * MAIN PROGRAM
- * 
- * Autor: Martin Bustos
- * Date: 12/8/2021
- * 
- * Platform: ATmega328P
- * 
- **********************************************/
-
-#define F_CPU 16000000
-
-#include <stdio.h>
-#include <stdbool.h>
-#include <math.h>
+#define __AVR_ATmega328P__
+#define F_CPU 16000000UL
 
 #include <avr/io.h>
 #include <util/delay.h>
 #include <avr/interrupt.h>
+#include <avr/sleep.h>
+#include <stdio.h>
 
-#include "include/uart.h"
+#include "i2cmaster.h"
+#include "sh1106.h"
+#include "ds3231.h"
+#include "usart.h"
 
-#define BAUD	9600
+#include "bitMaps.h"
 
-volatile short OK_pressed = 0;
-volatile short SELECT_pressed = 0;
+typedef struct profile
+{
+	uint8_t workTime;
+	uint8_t shortBreakTime;
+	uint8_t longBreakTime;
+	uint8_t interval;
 
-short mainMenuIsActive = 1;
-short configMenuIsActive = 0;
-short timerIsActive = 0;
-
-short workConfigIsActive = 0;
-short shortBreakConfigIsActive = 0;
-short longBreakConfigIsActive = 0;
-short intervalConfigIsActive = 0;
-
-volatile uint64_t total_ticks = 0;
-volatile uint16_t overflows = 0;
-volatile uint16_t remaining_ticks = 0;
-volatile unsigned char timer0_ovf = 0;
-volatile unsigned char timer0_rem = 0;
-
-volatile short busy = 0;
-
-unsigned char selection = 0;
-
-unsigned char actual_interval = 0;
-
-typedef struct timer{
-	unsigned char work_time;
-	unsigned char long_break_time;
-	unsigned char short_break_time;
-	unsigned char interval;
-	short autoload;
+}profile;
+typedef struct timer
+{
+	uint8_t minutes;
+	uint8_t seconds;
+	uint8_t interval;
 }timer;
 
-timer mytimer;
+volatile profile actualProfile;
+volatile timer myTimer;
 
+volatile uint8_t state = 0;					/* nothing = 0, workTime = 1, shortBreakTime = 2, longBreakTime = 3 */
 
-void usart_putc(unsigned char data) {
-	while (!(UCSR0A & (1<<UDRE0)));
-	UDR0 = data;
-}
+volatile uint8_t interruptMode = 0;			/* Button B = 0, Seconds interrupt = 1, Minutes interrupt = 2 */
+volatile uint16_t menuIndex = 0x00;			/* Level 0 Index 0 */
 
-int usart_putcf(char var, FILE *stream) {
-    if (var == '\n') usart_putc('\r');
-    usart_putc(var);
-    return 0;
-}
+char buff[40];
 
-static FILE mystdout = FDEV_SETUP_STREAM(usart_putcf, NULL, _FDEV_SETUP_WRITE);
+void setTimer(uint8_t minutes);
+void stopTimer();
 
-void printMenu(unsigned char selection) {
-	printf("\n\r\tMENU\n\r");
-	if (selection == 0) {
-		printf("->1 - Start timer\n\r2 - Configure timer\n\r3 - Put to sleep\n\n\r");
-	} else if (selection == 1) {
-		printf("1 - Start timer\n\r->2 - Configure timer\n\r3 - Put to sleep\n\n\r");
-	} else if (selection == 2) {
-		printf("1 - Start timer\n\r2 - Configure timer\n\r->3 - Put to sleep\n\n\r");
-	}
-	/*
-	printf("Main menu: %d\tConfig menu: %d\n", mainMenuIsActive, configMenuIsActive);
-	printf("Selection: %d\nworkConfigIsActive: %d\nshortBreakConfigIsActive: %d\nlongBreakConfigIsActive: %d\nintervalConfigIsActive: %d", selection, workConfigIsActive, shortBreakConfigIsActive, longBreakConfigIsActive, intervalConfigIsActive);
-	*/
-}
+ISR(INT0_vect);
+ISR(INT1_vect);
 
-void printConfig(unsigned char selection, unsigned char work_time, unsigned char short_break, unsigned char long_break, unsigned char interval){
-	printf("\n\r\tCONFIG\n\r");
-	if (selection == 0) {
-		printf("->1 - Work time: %d min\n\r2 - Short break: %d min\n\r3 - Long break: %d min\n\r4 - Break interval: %d\n\r5 - Save on rom\n\r6 - Exit\n\n\r", work_time, short_break, long_break, interval);
-	} else if (selection == 1) {
-		printf("1 - Work time: %d min\n\r->2 - Short break: %d min\n\r3 - Long break: %d min\n\r4 - Break interval: %d\n\r5 - Save on rom\n\r6 - Exit\n\n\r", work_time, short_break, long_break, interval);
-	} else if (selection == 2) {
-		printf("1 - Work time: %d min\n\r2 - Short break: %d min\n\r->3 - Long break: %d min\n\r4 - Break interval: %d\n\r5 - Save on rom\n\r6 - Exit\n\n\r", work_time, short_break, long_break, interval);
-	} else if (selection == 3) {
-		printf("1 - Work time: %d min\n\r2 - Short break: %d min\n\r3 - Long break: %d min\n\r->4 - Break interval: %d\n\r5 - Save on rom\n\r6 - Exit\n\n\r", work_time, short_break, long_break, interval);
-	} else if (selection == 4) {
-		printf("1 - Work time: %d min\n\r2 - Short break: %d min\n\r3 - Long break: %d min\n\r4 - Break interval: %d\n\r->5 - Save on rom\n\r6 - Exit\n\n\r", work_time, short_break, long_break, interval);
-	} else if (selection == 5) {
-		printf("1 - Work time: %d min\n\r2 - Short break: %d min\n\r3 - Long break: %d min\n\r4 - Break interval: %d\n\r5 - Save on rom\n\r->6 - Exit\n\n\r", work_time, short_break, long_break, interval);
-	}
-	/*
-	printf("Main menu: %d\tConfig menu: %d\n", mainMenuIsActive, configMenuIsActive);
-	printf("Selection: %d\nworkConfigIsActive: %d\nshortBreakConfigIsActive: %d\nlongBreakConfigIsActive: %d\nintervalConfigIsActive: %d", selection, workConfigIsActive, shortBreakConfigIsActive, longBreakConfigIsActive, intervalConfigIsActive);
-	*/
-}
+int main (void) {
 
-void init_timer0() {
-	/* Set timer 0 to normal work */
-	TCCR0A = 0x00;
+	PORTD |= (1<<PORTD2)|(1<<PORTD1);
 
-	/* Stop timer 0 */
-	TCCR0B = 0x00;
-}
+	i2c_init();
+	sh1106_init();
+	usart_init(9600);
 
-void set_timer0 () {
+	printBmp(mainMenu);
 
-    timer0_ovf = 61;
-    timer0_rem = 70;
+	/* Config sleep mode */
+	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+	sleep_enable();
 
-	/* Set timer 0 counter to 0 */
-	TCNT0 = 0;
+	/* Config external interrupts */
+	EICRA = (1<<ISC01)|(1<<ISC11);
+	EIMSK = (1<<INT0)|(1<<INT1);
 
-    /* Set compare unit A to interrupt at the remaining ticks */
-	OCR0A = timer0_rem;
-
-	/* Set interrupts for overflow and ouput compare unit A */
-	TIMSK0 = (1<<TOIE0);
-
-	/* Set timer 1 clock freq to F_CPU/1024 */
-	TCCR0B = (1<<CS02)|(1<<CS00);
-}
-
-void init_timer1() {
-	/* Set timer 1 to normal work */
-	TCCR1A = 0x00;
-
-	/* Stop timer 1 */
-	TCCR1B = 0x00;
-}
-
-void set_timer1 (uint64_t time) {
-    total_ticks = time * 15625;
-    overflows = total_ticks / 65535;
-    remaining_ticks = total_ticks - overflows * 65535;
-
-    printf("Overflows: %d\tRemaining ticks: %u\n", overflows, remaining_ticks);
-
-	/* Set timer 1 counter to 0 */
-	TCNT1H = 0;
-	TCNT1L = 0;
-
-    /* Set compare unit A to interrupt at the remaining ticks */
-	OCR1A = remaining_ticks;
-
-	/* Set interrupts for overflow and ouput compare unit A */
-	TIMSK1 = (1<<TOIE1);
-
-	/* Set timer 1 clock freq to F_CPU/1024 */
-	TCCR1B = (1<<CS12)|(1<<CS10);
-}
-
-void set_interrupts() {
-	/* Configure input and set pullups for them */
-	DDRD &= ~((1<<PORTD3)|(1<<PORTD2));
-	//PORTD |= (1<<PORTD3)|(1<<PORTD2);
-
-	/* Configure them as interrupts and select mode of operation */
-	EIMSK |= (0<<INT0)|(1<<INT1);
-	EICRA |= (1<<ISC11)|(1<<ISC01);
-	//EICRA = 0;
-}
-
-int main() {
-
-	/* Load defaults */
-	mytimer.interval = 0;
-	mytimer.long_break_time = 0;
-	mytimer.short_break_time = 0;
-	mytimer.work_time = 0;
-	mytimer.autoload = 0;
-
-	/* Stop global interrupts */
-	cli();
-
-	DDRB = (1<<DDB5);
-
-	/* Set stream */
-	stdout = &mystdout;
-
-	/* Initialize uart */
-	uart_init(UART_BAUD_SELECT(BAUD,F_CPU));
-
-	/* Initialize external interrupts */
-	set_interrupts();
-
-	/* Init timers */
-	init_timer1();
-	init_timer0();
-
-	/* Enable global interrupts */
-	sei();
-
-	/* Print main menu */
-	printf("\n\rAVR-POMODORO v0.1\n");
-	printMenu(selection);
-
-	while (1) {
-		while (timerIsActive){
-			printf("WORK TIME\n");
-            busy = 1;
-            set_timer1(mytimer.work_time*60);
-            while (busy);
-            busy = 1;
-            if (actual_interval == mytimer.interval){
-                printf("LONG BREAK!\n");
-                set_timer1(mytimer.long_break_time*60);
-                actual_interval = 0;
-            }else{
-                printf("SHORT BREAK!\n");
-                set_timer1(mytimer.short_break_time*60);
-                actual_interval++;
-            }
-            while (busy);
-		}
-		
-	}
-}
-
-ISR (TIMER1_OVF_vect){
-    printf("\t\tOVF\n");
-    if (overflows!=0)
-    {
-        overflows -= 1;
-    }else{
-
-	    TIMSK1 |= (1<<OCIE1A);
-    }
-}
-
-ISR (TIMER1_COMPA_vect){
-    printf("\t\tFinish\n");
-    /* Stop timer */
-    TCCR1B = 0x00;
-	/* Set interrupts for overflow and ouput compare unit A */
-	TIMSK1 &= ~(1<<OCIE1A);
-}
-
-ISR (TIMER0_OVF_vect){
-    if (timer0_ovf!=0)
-    {
-        timer0_ovf -= 1;
-    }else{
-
-	    TIMSK0 |= (1<<OCIE0A);
-    }
-}
-
-ISR (TIMER0_COMPA_vect){
-    /* Stop timer */
-    TCCR0B = 0x00;
-
-    /* Refresh screen */
-
-	/* Set interrupts for overflow and ouput compare unit A */
-	TIMSK0 &= ~(1<<OCIE0A);
-
-    set_timer0();
-}
-
-/* OK button interrupt */
-ISR(INT0_vect) {
-	printf("\t\t\tINT0\n");
-
-	if (mainMenuIsActive){
-
-		if (selection == 0) {
-			/* Go to start timer */
-			mainMenuIsActive = 0;
-			timerIsActive = 1;
-			/* Start timer 0 */
-			set_timer0();
-
-		} else if (selection == 1) {
-			/* Go to config menu */
-			mainMenuIsActive = 0;
-			configMenuIsActive = 1;
-			/* Print config menu */
-			selection = 0;
-			printConfig(selection, mytimer.work_time, mytimer.long_break_time, mytimer.short_break_time, mytimer.interval);
-		} else if (selection == 2) {
-			/* Go to sleep mode */
-			mainMenuIsActive = 0;
-			/* Clear main menu */
-		}
-		selection = 0;
-	} else if (configMenuIsActive) {
-
-		if (workConfigIsActive){
-			/* Disable configuration */
-			workConfigIsActive = 0;
-		} else if (shortBreakConfigIsActive) {
-			/* Disable configuration */
-			shortBreakConfigIsActive = 0;
-		} else if (longBreakConfigIsActive) {
-			/* Disable configuration */
-			longBreakConfigIsActive = 0;
-		} else if (intervalConfigIsActive) {
-			/* Disable configuration */
-			intervalConfigIsActive = 0;
-
-		} else {
-
-			if (selection == 0) {
-				/* Modify work time time */
-				workConfigIsActive = 1;
-			} else if (selection == 1) {
-				/* Modify short break time time */
-				longBreakConfigIsActive = 1;
-			} else if (selection == 2) {
-				/* Modify long break time time */
-				shortBreakConfigIsActive = 1;
-			} else if (selection == 3) {
-				/* Modify break time */
-				intervalConfigIsActive = 1;
-			} else if (selection == 4) {
-				/* Save configuration on rom */
-				
-			} else if (selection == 5) {
-				/* Go to main menu */
-				configMenuIsActive = 0;
-				mainMenuIsActive = 1;
-				selection = 0;
-				printMenu(selection);
-			}
-		}	
-	} else if (timerIsActive) {
-
-		/* Stop timer 0 */
-    	TCCR0B = 0x00;
-		
-		/* Go to main menu */
-		timerIsActive = 0;
-		mainMenuIsActive = 1;
-		selection = 0;
-		printMenu(selection);
-	}
-}
-
-/* SELECT button interrupt */
-ISR(INT1_vect) {
-	printf("\t\t\tINT1\n");
-	SELECT_pressed = 1;
-	if (SELECT_pressed)
-	{
+	/* Load default values */
+	/* Add EEPROM funtionality */
+	actualProfile.longBreakTime = 15;
+	actualProfile.shortBreakTime = 5;
+	actualProfile.workTime = 30;
+	actualProfile.interval = 2;
 	
-		if (mainMenuIsActive) {
-			selection++;
-			if (selection > 2) {
-				selection = 0;
-			}
-			printMenu(selection);
-		} else if (configMenuIsActive) {
-			if (workConfigIsActive){
-				/* Increment work time */
-				mytimer.work_time++;
-				if (mytimer.work_time>51) {
-					mytimer.work_time = 0;
-				}
-			} else if (shortBreakConfigIsActive) {
-				/* Increment short break time */
-				mytimer.short_break_time++;
-				if (mytimer.short_break_time>16) {
-					mytimer.short_break_time = 0;
-				}
-			} else if (longBreakConfigIsActive) {
-				/* Increment long break time */
-				mytimer.long_break_time++;
-				if (mytimer.long_break_time>21) {
-					mytimer.long_break_time = 0;
-				}
-			} else if (intervalConfigIsActive) {
-				/* Increment interval */
-				mytimer.interval++;
-				if (mytimer.interval>5) {
-					mytimer.interval = 0;
-				}
 
-			} else {
-				selection++;
-				if (selection > 5) {
-					selection = 0;
-				}
-			}
-			printConfig(selection, mytimer.work_time, mytimer.long_break_time, mytimer.short_break_time, mytimer.interval);
-		}
-		SELECT_pressed = 0;
+	sei();
+	while (1)
+	{
+
 	}
+	return 0;
+}
+
+void setTimer(uint8_t minutes)
+{
+	/* ALARM 1 INTERRUPTS EVERY SECOND */
+	ds3231_write(ALARM_1_SECONDS, 0x80);
+	ds3231_write(ALARM_1_MINUTES, 0x80);
+	ds3231_write(ALARM_1_HOURS, 0x80);
+	ds3231_write(ALARM_1_DATE, 0x80);
+
+	rtc_t aux = getTime();
+	aux.min += minutes;
+	if (aux.min>59)
+	{
+		aux.min -= 60;
+		aux.hour++;
+		if (aux.hour>23)
+			aux.hour = 0;
+	}
+
+	/* ALARM 2 INTERRUPTS WHEN HOURS AND MINUTES MATCH */
+	ds3231_write(ALARM_2_MINUTES, 0x7F&(dec2bcd(aux.min)));		/* A2M2 = 0 */
+	ds3231_write(ALARM_2_HOURS, 0x1F&(dec2bcd(aux.hour)));		/* A2M3 = 0 */
+	ds3231_write(ALARM_2_DATE, 0x80);							/* A2M4 = 1  DY/DT = 0 */
+
+	ds3231_write(RTC_CONTROL, (1<<INTCN)|(1<<A1IE)|(1<<A2IE));
+}
+
+void stopTimer()
+{
+	ds3231_write(RTC_CONTROL, (1<<INTCN));
+}
+
+/* Interrupt for B button and DS3231 alarms */
+/* If counter active, DS3231 alarm is active, if not, B button is active */
+ISR(INT1_vect)
+{
+	usart_write("INT1\r\n");
+}
+
+ISR(INT0_vect)
+{
+	usart_write("INT0\r\n");
 }
